@@ -1,0 +1,13 @@
+# Data files
+*.csv
+
+# Model checkpoints
+*.ckpt
+*.pth
+*.pt
+*.h5
+*.bin
+# (add any other extensions your training scripts use, e.g. .model, .tar)
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
