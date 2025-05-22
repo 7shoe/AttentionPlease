@@ -7,8 +7,8 @@ from collections import Counter, defaultdict
 import pandas as pd
 from tqdm import tqdm
 
-from utils.datasets import load_wmt
-from utils.datasets import load_rnd
+from utils.raw_data import load_wmt
+from utils.raw_data import load_rnd
 
 class Tokenizer:
     """
@@ -29,7 +29,8 @@ class Tokenizer:
         self.max_vocab_size = max_vocab_size
         self.special_tokens = special_tokens
         self.lower_case = lower_case
-        self.count_threshold = 20
+        self.count_threshold = count_threshold
+        self.unknown_token = '<UNK>'
 
         # re-compute
         if self.compute_vocab:
@@ -64,6 +65,9 @@ class Tokenizer:
         else:  
             with open(vocab_dest_file, 'r') as f:
                 self.token_vocab = yaml.safe_load(f)
+            
+        # inverse (for decoding)
+        self.inverse_token_vocab = {v:k for k,v in self.token_vocab.items()}
 
         pass
             
@@ -87,7 +91,7 @@ class Tokenizer:
 
         # remove rare words
         self.word_counter = Counter({word: cnt for word, cnt in self.word_counter.items() if cnt >= self.count_threshold})
-        print(f'Eliminated {(prev_len-len(self.word_counter)) / (prev_len):.2f}% of rarest words from corpus for tokenization.')
+        print(f'Eliminated {100. * (prev_len-len(self.word_counter)) / (prev_len):.2f}% of rarest words from corpus for tokenization.')
         
         # read out char alphabet
         # - exclu. whitespace
@@ -161,6 +165,11 @@ class Tokenizer:
         else:
             was_type_str = False
         for text_segment in text:
+            # convert (ü,ä,ö -> ue,ae,oe)
+            umlaut_conversion = {'Ü' : 'Ue', 'Ö' : 'Oe', 'Ä' : 'Ae', 'ü' : 'ue', 'ö' : 'oe', 'ä' : 'ae'}
+            for k,v in umlaut_conversion.items():
+                text_segment = text_segment.replace(k, v)
+                
             # filter non-character symbols
             text_segment = re.sub(r'[^a-zA-Z ]+', '', text_segment)
             
@@ -170,7 +179,7 @@ class Tokenizer:
             # lower-casing
             if lower_case:
                 text_segment = text_segment.lower()
-    
+            
             new_text.append(text_segment)
 
         # revert to input type
@@ -224,6 +233,16 @@ class Tokenizer:
         (replace unknown tokens for robust inference)
         """
         
-        token_id_seq = [self.token_vocab[token] if token in self.token_vocab else self.token_vocab['<UNK>'] for token in token_seq]
+        token_id_seq = [(self.token_vocab[token] if token in self.token_vocab else self.token_vocab[self.unknown_token]) for token in token_seq]
 
         return token_id_seq
+    
+    def decode(self, token_id_seq:list[int]) -> list[str]:
+        """
+        Given a sequence of token IDs, decodes into sequence of (textual) tokens
+        """
+        
+        # lookup in inverse token vocab
+        token_seq = [(self.inverse_token_vocab[token_id] if token_id in self.inverse_token_vocab else self.unknown_token) for token_id in token_id_seq]
+
+        return token_seq

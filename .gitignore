@@ -8,6 +8,7 @@
 *.h5
 *.bin
 # (add any other extensions your training scripts use, e.g. .model, .tar)
+*.cpython-311.pyc
 
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
