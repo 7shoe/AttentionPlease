@@ -27,31 +27,32 @@ class Transformer(nn.Module):
         self.h = h
         self.d_k = self.d // h
         self.d_ff = d_ff
+        self.n_vocab = n_vocab
         self.bos_idx = bos_idx
         self.padding_idx = padding_idx
         self.dtype = dtype
         self.device = device
 
-        # TESTING
-        self.abc = 666
-
         # shared embedding
-        self.embedding = nn.Embedding(num_embeddings=n_vocab,
-                                     embedding_dim=d,
-                                     padding_idx=padding_idx)
+        self.embedding = nn.Embedding(num_embeddings=self.n_vocab,
+                                     embedding_dim=self.d,
+                                     padding_idx=self.padding_idx)
 
         # Encoder
         # - token id embedding
         self.encoder_layers = nn.ModuleList([
             EncoderLayer(d=self.d, h=self.h, d_k=self.d_k, d_ff=self.d_ff) 
-            for _ in range(N)
+            for _ in range(self.N)
         ])
 
         # Decoder layers
         self.decoder_layers = nn.ModuleList([
             DecoderLayer(h=self.h, d=self.d, d_k=self.d_k, d_ff=self.d_ff)
-            for _ in range(N)
+            for _ in range(self.N)
         ])
+
+        # Output projection
+        self.output_head = nn.Linear(self.d, self.n_vocab, bias=False)
 
         # -> device
         self.to(self.device)
@@ -90,11 +91,10 @@ class Transformer(nn.Module):
         for decoder_layer in self.decoder_layers:
             X_dec = decoder_layer(X_dec, X_enc, tgt_mask)
 
-        # TODO
-        # Linear
-        # probability
+        # proj into vocab space
+        logits = self.output_head(X_dec)
 
-        return X_dec
+        return logits
 
     def causal_mask(self,):
         """
@@ -136,7 +136,7 @@ class Transformer(nn.Module):
         i = torch.arange(d, device=self.device, dtype=self.dtype).unsqueeze(0)
     
         # divisor
-        divisor = (10000 ** ((2.0 * i) / self.d))
+        divisor = (10_000 ** ((2.0 * i) / self.d))
         
         # PosEnc (even: sin, odd: cos)
         PE = torch.zeros(L, d, device=self.device, dtype=self.dtype)
