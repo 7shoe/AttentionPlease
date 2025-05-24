@@ -2,6 +2,7 @@ import random
 import pandas as pd
 from pathlib import Path
 import numpy as np
+import itertools
 
 def load_wmt(corpus_source_file:Path=Path('/eagle/projects/argonne_tpc/siebenschuh/attention_from_scratch/data/wmt14/wmt14_translate_de-en_train.csv'),
              nrows:int=50_000,
@@ -36,6 +37,24 @@ def load_wmt(corpus_source_file:Path=Path('/eagle/projects/argonne_tpc/siebensch
     
     return corpus
 
+def get_wmt_df_len(subset:str='train',
+                   corpus_source_dir:Path=Path('/eagle/projects/argonne_tpc/siebenschuh/attention_from_scratch/data/wmt14/')):
+    """
+    Loads subset of WMT14 EN<->DE dataset in chunks of size `n_chunk` starting at index `start_idx`
+    """
+
+    assert subset in {'train', 'validation', 'test'}, "`subset` must be either `train`, `validation`, or `test`."
+    
+    # load file
+    corpus_source_file = Path(corpus_source_dir) / f'wmt14_translate_de-en_{subset}.csv'
+    assert corpus_source_file.is_file(), f"File path invalid: {corpus_source_file}"
+
+    # read to count rows
+    with open(str(corpus_source_file), "r", encoding="utf-8") as f:
+        total_rows = sum(1 for _ in f) - 1 
+
+    return total_rows
+    
 def load_wmt_chunk_df(subset:str='train',
                       corpus_source_dir:Path=Path('/eagle/projects/argonne_tpc/siebenschuh/attention_from_scratch/data/wmt14/'),
                       n_chunk:int=10_000,
