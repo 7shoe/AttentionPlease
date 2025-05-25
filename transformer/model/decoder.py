@@ -10,7 +10,8 @@ class DecoderLayer(nn.Module):
                  h:int,
                  d:int,
                  d_k:int,
-                 d_ff:int):
+                 d_ff:int,
+                 p_dropout:float=0.01):
         
         super().__init__()
 
@@ -18,6 +19,7 @@ class DecoderLayer(nn.Module):
         self.h = h
         self.d = d
         self.d_k = d_k
+        self.dropout = nn.Dropout(p_dropout)
 
         # Self- & cross-Attention
         self.self_attn  = MultiHeadAttention(h=h, d=d, d_k=d_k, d_v=d_k)
@@ -40,12 +42,12 @@ class DecoderLayer(nn.Module):
         """
 
         # 1)
-        X_tgt = self.norm1(X_tgt + self.self_attn(X_tgt, mask=mask))
+        X_tgt = self.norm1(X_tgt + self.dropout(self.self_attn(X_tgt, mask=mask)))
 
         # 2)
-        X_tgt = self.norm2(X_tgt + self.cross_attn(X_tgt, K_in=X_enc, V_in=X_enc))
+        X_tgt = self.norm2(X_tgt + self.dropout(self.cross_attn(X_tgt, K_in=X_enc, V_in=X_enc)))
 
         # 3) FFN
-        X_tgt = self.norm3(X_tgt + self.ffn(X_tgt))
+        X_tgt = self.norm3(X_tgt + self.dropout(self.ffn(X_tgt)))
         
         return X_tgt

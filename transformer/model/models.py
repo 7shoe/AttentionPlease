@@ -38,6 +38,9 @@ class Transformer(nn.Module):
                                      embedding_dim=self.d,
                                      padding_idx=self.padding_idx)
 
+        # positional embedding
+        self.positional_encoding()
+
         # Encoder
         # - token id embedding
         self.encoder_layers = nn.ModuleList([
@@ -72,24 +75,32 @@ class Transformer(nn.Module):
         src_ids = src_ids.to(self.device)
         tgt_ids = tgt_ids.to(self.device)
 
+        # src padding mask
+        src_pad_mask = src_ids.eq(self.padding_idx)
+        tgt_pad_mask = tgt_ids.eq(self.padding_idx)
+
+        # infer size
+        B, L_src = src_ids.size()
+        _, L_tgt = tgt_ids.size()
+        
         # embedd
-        X_enc = self.embedding(src_ids)
-        X_enc = self.positional_encoding(X_enc)
+        X_enc = self.embedding(src_ids) + self.PE[:L_src]
 
         # encode
         for encoder_layer in self.encoder_layers:
-            X_enc = encoder_layer(X_enc, src_mask)
+            X_enc = encoder_layer(X_enc, src_pad_mask)
+
+        # causal mask
+        causal = self.causal_mask()[:L_tgt, :L_tgt]
+        pad = tgt_pad_mask.unsqueeze(1).unsqueeze(2)
+        causal = causal.unsqueeze(0).unsqueeze(0)
+        combined_mask = pad | causal
 
         # decode
-        X_dec = self.embedding(self.right_shift(tgt_ids))
-        X_dec = self.positional_encoding(X_dec)
-
-        # causal mask for decoder
-        if tgt_mask is None:
-            tgt_mask = self.causal_mask()
+        X_dec = self.embedding(self.right_shift(tgt_ids)) + self.PE[:L_tgt]
         
         for decoder_layer in self.decoder_layers:
-            X_dec = decoder_layer(X_dec, X_enc, tgt_mask)
+            X_dec = decoder_layer(X_dec, X_enc, combined_mask)
 
         # proj into vocab space
         logits = self.output_head(X_dec)
@@ -119,7 +130,7 @@ class Transformer(nn.Module):
         return Xr
 
 
-    def positional_encoding(self, X:torch.Tensor) -> torch.Tensor:
+    def positional_encoding(self, ) -> None:
         """
         Add positional encoding:
         
@@ -128,19 +139,19 @@ class Transformer(nn.Module):
         
         for pos as token sequence index in {0,...,L-1} and i as embedding index in {0,...,d-1}.
         """
-
-        L, d = X.size()[-2], X.size()[-1]
         
         # broadcast
-        pos = torch.arange(L, device=self.device, dtype=self.dtype).unsqueeze(1)
-        i = torch.arange(d, device=self.device, dtype=self.dtype).unsqueeze(0)
+        pos = torch.arange(self.L, device=self.device, dtype=self.dtype).unsqueeze(1)
+        i = torch.arange(self.d, device=self.device, dtype=self.dtype).unsqueeze(0)
     
         # divisor
         divisor = (10_000 ** ((2.0 * i) / self.d))
         
         # PosEnc (even: sin, odd: cos)
-        PE = torch.zeros(L, d, device=self.device, dtype=self.dtype)
+        PE = torch.zeros(self.L, self.d, device=self.device, dtype=self.dtype)
         PE[:, 0::2] = torch.sin(pos / divisor[:, 0::2])
         PE[:, 1::2] = torch.cos(pos / divisor[:, 1::2])
 
-        return X + PE
+        self.PE = PE
+
+        pass

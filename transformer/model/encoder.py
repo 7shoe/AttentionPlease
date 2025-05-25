@@ -10,7 +10,8 @@ class EncoderLayer(nn.Module):
                  h:int,
                  d:int,
                  d_k:int,
-                 d_ff:int):
+                 d_ff:int,
+                 p_dropout:float=0.1):
         
         super().__init__()
 
@@ -18,6 +19,7 @@ class EncoderLayer(nn.Module):
         self.h = h
         self.d = d
         self.d_k = d_k
+        self.dropout = nn.Dropout(p_dropout)
 
         # multi-head self-attention
         self.mhsa = MultiHeadAttention(h=h, d=d, d_k=d_k, d_v=d_k)
@@ -37,9 +39,9 @@ class EncoderLayer(nn.Module):
         """
 
         # MHSA
-        x = self.norm1(x + self.mhsa(x, mask=mask))
+        x = self.norm1(x + self.dropout(self.mhsa(x, mask=mask)))
 
         # FNN
-        x = self.norm2(x + self.ffn(x))
+        x = self.norm2(x + self.dropout(self.ffn(x)))
         
         return x
