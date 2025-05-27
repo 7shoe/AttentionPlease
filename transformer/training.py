@@ -21,6 +21,22 @@ from torch.utils.data import DataLoader
 from utils.dataset import NeuralTranslationDataset
 
 
+def get_transformer_schedule(warmup_steps: int = 4000):
+    """
+    Transformer learning rate schedule:
+    - Linear warmup from 0 to base_lr over warmup_steps
+    - Square root decay after warmup
+    """
+    def lr_lambda(step):
+        step = max(1, step)  # Avoid division by zero
+        if step < warmup_steps:
+            # Linear warmup
+            return step / warmup_steps
+        else:
+            # Square root decay
+            return (warmup_steps / step) ** 0.5
+    return lr_lambda
+
 def main(args):
     
     # start time
@@ -39,10 +55,11 @@ def main(args):
     
     # model
     transformer = Transformer(N=args.N, 
-                              L=64, 
+                              L_max=args.L_max, 
                               d=args.d, 
-                              h=8, 
-                              d_ff=2048,
+                              h=args.h, 
+                              d_ff=args.d_ff,
+                              p_dropout=args.p_dropout,
                               n_vocab=len(tokenizer.token_vocab), 
                               padding_idx=tokenizer.token_vocab['<PAD>'], 
                               bos_idx=tokenizer.token_vocab['<BOS>'], 
@@ -50,14 +67,21 @@ def main(args):
                               device=device)
     
     # criterion
-    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.token_vocab['<PAD>'])
+    criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.token_vocab['<PAD>'], label_smoothing=args.label_smoothing)
     
     # optimizer
     optimizer = torch.optim.AdamW(transformer.parameters(), lr=args.learning_rate)
     
     # scheduler
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.95)
-    
+    if args.pre_ln:
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.99)
+    else:
+        warmup_steps = 4
+        scheduler = lr_scheduler.LambdaLR(
+            optimizer, 
+            lr_lambda=get_transformer_schedule(warmup_steps=warmup_steps)
+        )
+        
     # dataset
     data_train = NeuralTranslationDataset(subset='train')        # TODO -> `train`
     data_val   = NeuralTranslationDataset(subset='validation')
@@ -86,11 +110,14 @@ def main(args):
     pbar = tqdm(total=total_iterations, 
                 desc="Training Progress",
                 unit="batch",
-                ncols=120)
+                ncols=150)
 
-    # Training
+    # logging data
+    global_step = 0
     train_loss_list, val_loss_list = [], []
     train_time_list, val_time_list = [], []
+
+    # Training
     for epoch in range(1, args.n_epochs+1):
         transformer.train()
         total_loss = 0.0
@@ -102,6 +129,10 @@ def main(args):
             
             # logits
             logits = transformer(src_ids=src, tgt_ids=tgt)
+
+            # 
+            if j%150==0:
+                print(f'logits.size(): {logits.size()}')
     
             B, T, V = logits.shape
     
@@ -125,15 +156,18 @@ def main(args):
                 val_loss_list.append(val_loss)
                 val_time_list.append(time.time())
 
-            # ??? val_loss.item() ??? 
-            # val_loss_list.append(???)
-
+            # meta data
+            scheduler.step()
+            global_step += 1
+            current_lr = scheduler.get_last_lr()[0]
+            
             # progress update
             pbar.set_postfix({
                 'Epoch': f'{epoch}/{args.n_epochs}',
                 'Batch': f'{j+1}/{len(train_loader)}',
-                'Epoch_Avg': f'{np.mean(train_loss_list[-10:]):.4f}',
-                'LR': f'{optimizer.param_groups[0]["lr"]:.2e}'
+                'Train_loss': f'{np.mean(train_loss_list[-10:]):.4f}',
+                'LR': f'{current_lr:.2e}',
+                'Step': global_step,
             })
             pbar.update(1)
     
@@ -143,15 +177,31 @@ def main(args):
     # store model
     ckpt_dir = Path("/eagle/projects/argonne_tpc/siebenschuh/attention_from_scratch/data/checkpoints")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(transformer.state_dict(), ckpt_dir / f"{ts}_epoch{epoch}.pth")
+    ckpt_file_path = ckpt_dir / f"{ts}_epoch{epoch}.pth"
+    torch.save(transformer.state_dict(), ckpt_file_path)
+
+    # print checkpoint path
+    print(f'Checkpoint: {ckpt_file_path}')
+
+        #n_vocab=len(tokenizer.token_vocab), 
+                              #padding_idx=tokenizer.token_vocab['<PAD>'], 
+                              #bos_idx=tokenizer.token_vocab['<BOS>'], 
+                              #dtype=torch.float, 
+
+    # args dictionary
+    args_dict = vars(args) | {'n_vocab' : len(tokenizer.token_vocab), 
+                              'padding_idx' : tokenizer.token_vocab['<PAD>'], 
+                              'bos_idx' : tokenizer.token_vocab['<BOS>']}
 
     # log loss
     log_data = {
+        'args': args_dict,
         'metadata': {
             'timestamp': ts,
             'n_epochs': args.n_epochs,
             'N': args.N,
             'learning_rate': args.learning_rate,
+            'checkpoint': str(ckpt_file_path)
         },
         'training_log': {
             'train_losses': train_loss_list,
@@ -182,34 +232,73 @@ if __name__=='__main__':
                         default=6,
                         help='Number of transformer layers (default: 6)')
     
-    # Add learning rate
+    # learning rate
     parser.add_argument('--learning_rate', 
                         type=float, 
                         default=1e-4,
                         help='Learning rate for optimizer (default: 1e-4)')
+
+    # label smoothing
+    parser.add_argument('--label_smoothing', 
+                        type=float, 
+                        default=0.0,
+                        help='Label smoothing (default: 0.0; i.e. none).')
     
-    # Optional: Add other useful arguments
+    # batch size
     parser.add_argument('--batch_size', 
                         type=int, 
                         default=256,
                         help='Batch size for training (default: 256)')
-    
+
+    # embedding dimension
     parser.add_argument('--d', 
                         type=int, 
                         default=512,
                         help='Model embedding dimension (default: 512)')
 
+    # number of heads
+    parser.add_argument('--h', 
+                        type=int, 
+                        default=8,
+                        help='Number of heads (default: 8)')
+
+    # L_max
+    parser.add_argument('--L_max', 
+                        type=int, 
+                        default=64,
+                        help='Maximum number of sequence tokens (default: 64)')  # d_ff
+
+    # d_ff
+    parser.add_argument('--d_ff', 
+                        type=int, 
+                        default=2048,
+                        help='FFN embedding dimension (default: 2048)')
+
+    # dropout
+    parser.add_argument('--p_dropout', 
+                        type=float,
+                        default=0.0,
+                        help='Dropout probability (default: 0.1)')
+    
+    # pre-layer normalization flag
+    parser.add_argument('--pre_ln', 
+                        action='store_true',
+                        help='Use pre-layer normalization instead of post-layer normalization (default: False)')
+
     # parse arguments
     args = parser.parse_args()
-    
+
     # print config
     print("-" * 30)
     print("Training Configuration:")
     print(f"  Epochs: {args.n_epochs}")
     print(f"  Transformer layers (N): {args.N}")
-    print(f"  Learning rate: {args.learning_rate}")
-    print(f"  Batch size: {args.batch_size}")
-    print(f"  Model dimension: {args.d}")
+    print(f"  Learning rate (lr): {args.learning_rate}")
+    print(f"  Batch size (B): {args.batch_size}")
+    print(f"  Hidden dimension (d_model): {args.d}")
+    print(f"  Label smoothing: {args.label_smoothing}")
+    print(f"  Dropout probability (p_dropout): {args.p_dropout}")
+    print(f"  Pre-layer norm: {args.pre_ln}")
     print("-" * 30)
 
     main(args)

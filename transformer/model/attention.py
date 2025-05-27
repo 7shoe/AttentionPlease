@@ -1,3 +1,4 @@
+# attention.py
 import math
 import torch
 import torch.nn as nn
@@ -8,7 +9,8 @@ class MultiHeadAttention(nn.Module):
                  h:int,
                  d:int, 
                  d_k:int, 
-                 d_v:int):
+                 d_v:int,
+                 p_dropout:float=0.0):
         
         super().__init__()
         
@@ -16,12 +18,16 @@ class MultiHeadAttention(nn.Module):
         self.d = d
         self.d_k = d_k
         self.d_v = d_v
+        self.p_dropout = p_dropout
 
         # Q, K, V projections
-        self.q_proj  = nn.Linear(in_features=d,       out_features=h * d_k,     bias=False)
-        self.k_proj = nn.Linear(in_features=d,        out_features=h * d_k,     bias=False)
-        self.v_proj = nn.Linear(in_features=d,        out_features=h * d_v,     bias=False)
-        self.out_proj= nn.Linear(in_features=h * d_v, out_features=d,           bias=False)
+        self.q_proj = nn.Linear(in_features=self.d,        out_features=self.h * self.d_k, bias=False)
+        self.k_proj = nn.Linear(in_features=self.d,        out_features=self.h * self.d_k, bias=False)
+        self.v_proj = nn.Linear(in_features=self.d,        out_features=self.h * self.d_v, bias=False)
+        self.out_proj= nn.Linear(in_features=self.h * self.d_v, out_features=self.d,       bias=False)
+
+        # attention dropout
+        self.dropout = nn.Dropout(self.p_dropout)
         
         pass
 
@@ -34,7 +40,23 @@ class MultiHeadAttention(nn.Module):
             
         # Move head dimension: (*lead, L, h, d_head) -> (*lead, h, L, d_head)
         perm = list(range(len(lead))) + [len(lead)+1, len(lead), len(lead)+2]
+        
         return reshaped.permute(*perm)
+
+    def combine_heads(self, tensor: torch.Tensor):
+        """
+        Combine multiple heads back into single representation
+        Input:  (*lead, h, L, d_head)
+        Output: (*lead, L, h*d_head)
+        """
+        *lead, h, L, d_head = tensor.shape
+        
+        # Move head dimension: (*lead, h, L, d_head) -> (*lead, L, h, d_head)
+        perm = list(range(len(lead))) + [len(lead)+1, len(lead), len(lead)+2]
+        permuted = tensor.permute(*perm)
+        
+        return permuted.reshape(*lead, L, h * d_head)
+
 
     def forward(self,
                 Q_in: torch.Tensor,
@@ -66,16 +88,23 @@ class MultiHeadAttention(nn.Module):
         
         # mask
         if mask is not None:
-            scores = scores.masked_fill(mask.unsqueeze(0).unsqueeze(0), float("-inf"))
+            # Handle different mask shapes robustly
+            if mask.dim() == 2:  # (B, L) -> for key masking
+                # Expand to (B, 1, 1, L) for broadcasting
+                mask = mask.unsqueeze(1).unsqueeze(2)
+            elif mask.dim() == 3:  # (B, L_q, L_k) -> full attention mask
+                # Expand to (B, 1, L_q, L_k) for broadcasting
+                mask = mask.unsqueeze(1)
+
+            scores = scores.masked_fill(mask, -1e9)
 
         # softmax()
         attn = torch.softmax(scores, dim=-1)
+        #attn = self.dropout(attn)  # Add this
         context = torch.matmul(attn, V)
 
         # recombine heads
-        context = context.permute(0,2,1,3).contiguous()
-        context = context.view(context.size(0), context.size(1), -1)
-        
+        context = self.combine_heads(context)  # (*lead, L, h*d_v)
 
         # output projecion
         output = self.out_proj(context)
